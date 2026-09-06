@@ -13,7 +13,7 @@ Press the microphone, say your question, stop talking — the speech is transcri
 
 | | |
 |---|---|
-| 🎤 **Dictation** | Record → transcribe → the text lands in the Claudian input and is sent for you. Recording stops by itself after ~2 seconds of silence. |
+| 🎤 **Dictation** | Record → transcribe → the text lands in the Claudian input and is sent for you, or waits there for you to press Enter — your choice in settings. No length limit: recording stops when you go quiet. |
 | 🔊 **Speaking answers** | When Claudian finishes writing, the answer is cleaned of code, tables, links and file paths, and read aloud. |
 | 🔇 **One-click mute** | A speaker button next to the microphone: coloured — answers are spoken, greyed out — screen only. Pressing it mid-sentence stops the speech immediately. |
 | 🗣 **Conversation mode** | After each spoken answer the microphone opens again. Say "стоп" to leave the loop. |
@@ -25,7 +25,7 @@ You need **one** speech-to-text key. Both providers are pay-as-you-go and neithe
 
 | | Speech to text | Text to speech | Works from Russia without VPN |
 |---|---|---|---|
-| **Yandex SpeechKit** | yes, phrases up to 29 s | yes, 13 Russian voices | yes |
+| **Yandex SpeechKit** | yes, any length — long audio is split at pauses | yes, 13 Russian voices | yes |
 | **OpenAI** | yes (Whisper), long monologues | yes | no |
 | **System voice (macOS)** | — | yes, free, offline | yes |
 
@@ -72,6 +72,8 @@ MIT © Vadim Fedorov
 ## По-русски
 
 Плагин к [Клодиану](https://github.com/YishenTu/claudian): нажал микрофон, сказал вопрос, замолчал — текст распознался, ушёл в чат, а готовый ответ прозвучал вслух. Рядом с микрофоном кнопка-динамик: цветная — читаю вслух, серая — ответ только на экране.
+
+Диктовать можно сколько угодно — длинная запись режется по паузам и распознаётся целиком. Распознанный текст либо уходит в чат сам, либо ждёт в поле ввода, если так удобнее.
 
 Нужен один ключ распознавания речи — Яндекс SpeechKit (работает из России без VPN) или OpenAI Whisper (нужен VPN). Озвучка: живой голос Яндекса, голос OpenAI или бесплатный системный голос Mac. Если платный сервис не ответил, плагин не замолчит — дочитает системным голосом.
 

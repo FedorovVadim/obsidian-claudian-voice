@@ -23,6 +23,10 @@ const { Plugin, PluginSettingTab, Setting, Notice, requestUrl, setIcon, Platform
 // Настройки по умолчанию
 // ────────────────────────────────────────────────────────────────────────────
 
+// Аварийный потолок записи. Не ограничение для человека, а страховка от
+// «микрофон забыли выключить»: час речи — это ~115 МБ в памяти.
+const SAFETY_MAX_SEC = 3600;
+
 const DEFAULTS = {
   // Распознавание речи (что говорю → текст)
   sttProvider: 'openai',            // 'openai' | 'yandex'
@@ -38,7 +42,7 @@ const DEFAULTS = {
   conversationMode: false,          // после озвучки снова включать микрофон
   vadEnabled: true,                 // автостоп записи по тишине
   silenceStopSec: 2.0,              // сколько секунд тишины = конец фразы
-  maxRecordSec: 120,                // предохранитель длины записи (2 минуты)
+  maxRecordSec: 0,                  // предел длины записи в секундах; 0 — без ограничения
 
   // Озвучка (текст → голос)
   ttsEngine: 'system',              // 'system' (бесплатно) | 'yandex' | 'openai'
@@ -355,6 +359,21 @@ async function mapLimit(items, limit, fn) {
  * Режем не строго по счётчику, а в самом тихом месте рядом с границей —
  * иначе слово рвётся пополам и обе половины распознаются мусором.
  */
+/** Выполнить задачи пачками по `limit` штук, сохранив порядок результатов */
+async function mapLimit(items, limit, fn) {
+  const out = new Array(items.length);
+  let next = 0;
+  const workers = new Array(Math.min(limit, items.length)).fill(0).map(async () => {
+    while (true) {
+      const i = next++;
+      if (i >= items.length) return;
+      out[i] = await fn(items[i], i);
+    }
+  });
+  await Promise.all(workers);
+  return out;
+}
+
 function splitPcmAtQuiet(pcm, maxSamples) {
   const out = [];
   const FRAME = 1600;             // 100 мс
@@ -804,8 +823,10 @@ class ClaudianVoicePlugin extends Plugin {
   async startRecording() {
     if (this.state === 'rec') return;
     this.stopSpeaking(); // чтобы микрофон не записал озвучку
-    // потолка в 29 секунд больше нет: длинную запись режем на куски сами
-    const maxSec = Math.max(10, Number(this.settings.maxRecordSec) || 120);
+    // потолка в 29 секунд больше нет: длинную запись режем на куски сами.
+    // Ноль в настройке значит «без ограничения» — остаётся только страховка.
+    const chosen = Number(this.settings.maxRecordSec) || 0;
+    const maxSec = chosen > 0 ? Math.max(10, chosen) : SAFETY_MAX_SEC;
     const rec = new Recorder({
       vad: this.settings.vadEnabled,
       silenceSec: Math.max(0.8, Number(this.settings.silenceStopSec) || 2),
@@ -917,12 +938,19 @@ class ClaudianVoicePlugin extends Plugin {
     if (pcm16k.length <= CHUNK) return this.transcribeYandexChunk(pcm16k);
 
     const parts = splitPcmAtQuiet(pcm16k, CHUNK);
-    const texts = [];
-    for (let i = 0; i < parts.length; i++) {
-      this.setState('stt');
-      new Notice('Распознаю часть ' + (i + 1) + ' из ' + parts.length + '…', 1500);
-      texts.push(await this.transcribeYandexChunk(parts[i]));
-    }
+    this.setState('stt');
+    new Notice('Распознаю ' + Math.round(pcm16k.length / 16000) + ' секунд речи — '
+             + parts.length + ' частей…', 3000);
+
+    // по очереди длинная речь ждала бы минутами, поэтому четыре части разом.
+    // Порядок сохраняется — иначе фразы перемешаются местами
+    let done = 0;
+    const texts = await mapLimit(parts, 4, async (part) => {
+      const text = await this.transcribeYandexChunk(part);
+      done++;
+      if (parts.length > 4) this.renderStatus(null, 'распознано ' + done + ' из ' + parts.length);
+      return text;
+    });
     return texts.filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
   }
 
@@ -1248,7 +1276,7 @@ class ClaudianVoicePlugin extends Plugin {
     });
   }
 
-  renderStatus(recSec) {
+  renderStatus(recSec, note) {
     if (!this.statusEl) return;
     const el = this.statusEl;
     el.removeClass('cv-rec', 'cv-busy', 'cv-speak');
@@ -1261,7 +1289,7 @@ class ClaudianVoicePlugin extends Plugin {
       el.setAttribute('aria-label', 'Идёт запись. Клик — отменить без отправки');
     } else if (this.state === 'stt') {
       el.addClass('cv-busy');
-      el.setText('⏳ распознаю…');
+      el.setText(note ? '⏳ ' + note : '⏳ распознаю…');
       el.setAttribute('aria-label', 'Распознавание речи');
     } else if (this.state === 'speaking') {
       el.addClass('cv-speak');
@@ -1342,9 +1370,25 @@ class ClaudianVoiceSettingTab extends PluginSettingTab {
     containerEl.createEl('h3', { text: '2. Поведение' });
 
     new Setting(containerEl)
-      .setName('Отправлять сразу после распознавания')
-      .setDesc('Выключено — текст только вставляется в поле, отправляешь сам клавишей Enter.')
-      .addToggle(t => t.setValue(s.autoSend).onChange(async v => { s.autoSend = v; await save(); }));
+      .setName('Что делать с распознанным текстом')
+      .setDesc('Либо отправляю сам, либо кладу в поле ввода — прочитаешь, поправишь и отправишь Enter.')
+      .addDropdown(d => d
+        .addOption('send', 'Отправлять сразу в чат')
+        .addOption('insert', 'Вставлять в поле — отправлю сам')
+        .setValue(s.autoSend ? 'send' : 'insert')
+        .onChange(async v => { s.autoSend = (v === 'send'); await save(); }));
+
+    new Setting(containerEl)
+      .setName('Предел длины диктовки')
+      .setDesc('Сколько можно говорить за один раз. Без ограничения — запись идёт, пока не замолчишь '
+             + 'или пока сам не остановишь. Длинная речь режется на части и распознаётся целиком.')
+      .addDropdown(d => d
+        .addOption('0', 'Без ограничения')
+        .addOption('120', '2 минуты')
+        .addOption('300', '5 минут')
+        .addOption('600', '10 минут')
+        .setValue(String(Number(s.maxRecordSec) || 0))
+        .onChange(async v => { s.maxRecordSec = Number(v); await save(); }));
 
     new Setting(containerEl)
       .setName('Автостоп по тишине')
