@@ -136,6 +136,12 @@ const SPEAK_SKIP_SELECTOR = [
   '[class*="badge"]', '[class*="action"]', '[class*="toolbar"]',
   '[class*="duration"]', '[class*="usage"]', '[class*="token"]', '[class*="cost"]',
   '[class*="timestamp"]', '[class*="meta"]', '[class*="footer"]', '[class*="copy"]',
+  // рабочая кухня агента: команды, их вывод, правки файлов, размышления, планы.
+  // Человеку нужен рассказ о сделанном, а не «Bash cd слэш Users слэш…»
+  '[class*="claudian-tool"]', '[class*="claudian-thinking"]', '[class*="claudian-diff"]',
+  '[class*="claudian-code"]', '[class*="claudian-ask-approval"]', '[class*="claudian-plan"]',
+  '[class*="claudian-mcp"]', '[class*="claudian-agent-skill"]', '[class*="claudian-todo"]',
+  '[class*="claudian-inline-preview"]', '[class*="claudian-external-context"]',
 ].join(',');
 
 /**
@@ -168,6 +174,9 @@ function extractSpeakable(messageEl, settings) {
 
   let t = parts.join('');
   t = t.replace(/\\+/g, ' ');                       // экранирующие косые черты не читаем
+  // страховка на случай, если кусок команды всё-таки просочился мимо разметки:
+  // выбрасываем «слова» с признаками кода — их вслух читать бессмысленно
+  t = t.replace(/(^|\s)\S*(&&|\|\||<<|>>|\$\(|;\s*python3|--[a-z][a-z-]{2,})\S*/g, ' ');
   t = t.replace(/https?:\/\/\S+/g, ' ссылка ');
   // ссылки на заметки: читаем только название, без папок и расширения
   t = t.replace(/\[\[([^\]|]+)\|([^\]]+)\]\]/g, '$2');
