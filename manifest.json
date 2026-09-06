@@ -1,7 +1,7 @@
 {
   "id": "claudian-voice",
   "name": "Claudian Voice",
-  "version": "1.7.0",
+  "version": "1.8.0",
   "minAppVersion": "1.7.2",
   "description": "Голосовое управление плагином Claudian: диктуй вопросы голосом и слушай ответы вместо чтения.",
   "author": "Vadim Fedorov + Claudian",

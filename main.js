@@ -50,6 +50,16 @@ const DEFAULTS = {
   yandexTtsApi: 'v3',               // 'v3' — новый движок (живее и дешевле) | 'v1' — старый
   yandexTtsRole: 'good',            // амплуа голоса в v3: good | neutral | friendly | strict
   debugDump: true,                  // писать последний озвученный текст в файл (для разбора ошибок)
+  // Пересказ для ушей: письменный ответ (заголовки, списки, детали) плохо
+  // звучит вслух, каким голосом его ни читай. Перед озвучкой просим модель
+  // пересказать его живой речью — главное вперёд.
+  rewriteForSpeech: false,          // включается после того, как вставлен ключ
+  rewriteApiKey: '',                // ключ Yandex Cloud с ролью ai.languageModels.user
+  rewriteFolderId: '',              // каталог Yandex Cloud
+  rewriteModel: 'yandexgpt-5-lite', // дешёвая модель, для пересказа достаточно
+  rewriteMinChars: 400,             // короткие ответы пересказывать незачем
+  rewriteTargetChars: 900,          // примерно минута речи
+
   skipCodeBlocks: true,             // код и таблицы не читать вслух
   maxSpeakChars: 2500,              // длиннее — обрезать («дальше на экране»)
 };
@@ -662,7 +672,70 @@ class ClaudianVoicePlugin extends Plugin {
         + ', начало: ' + JSON.stringify(raw.slice(0, 120)));
     }
     this.trace('озвучиваю, символов: ' + text.length);
-    this.speak(text);
+    this.speakMaybeRetold(text);
+  }
+
+  /**
+   * Перед озвучкой при желании пересказываем ответ живой речью.
+   * Письменный текст со списками и заголовками звучит роботом независимо от
+   * голоса — тут лечится не произношение, а сама подача.
+   */
+  async speakMaybeRetold(text) {
+    let toSay = text;
+    const s = this.settings;
+    if (s.rewriteForSpeech && (s.rewriteApiKey || '').trim() && text.length >= s.rewriteMinChars) {
+      try {
+        const retold = await this.retellForSpeech(text);
+        if (retold && retold.length > 40) {
+          this.trace('пересказал для речи: было ' + text.length + ', стало ' + retold.length);
+          toSay = retold;
+        }
+      } catch (e) {
+        console.warn('[claudian-voice] пересказ не удался, читаю как есть:', e);
+        this.trace('пересказ не удался (' + (e && e.message) + ') — читаю исходный текст');
+      }
+    }
+    return this.speak(toSay);
+  }
+
+  /** Пересказ через YandexGPT — тот же облачный аккаунт, из России без VPN */
+  async retellForSpeech(text) {
+    const s = this.settings;
+    const folder = (s.rewriteFolderId || '').trim();
+    if (!folder) throw new Error('не указан каталог Yandex Cloud');
+
+    const system = [
+      'Ты пересказываешь письменный ответ помощника так, чтобы владелец слушал его вслух.',
+      'Обращайся на «ты», говори от первого лица — это твой собственный отчёт о работе.',
+      'Главное вперёд: что сделано и что нужно от собеседника. Дальше подробности по важности.',
+      'Никаких списков, заголовков, разметки, путей к файлам, названий папок и версий.',
+      'Живые связные предложения, каждое законченное. Сокращения и знаки — словами.',
+      'Объём — около ' + (Number(s.rewriteTargetChars) || 900) + ' символов, это примерно минута речи.',
+    ].join(' ');
+
+    const resp = await requestUrl({
+      url: 'https://llm.api.cloud.yandex.net/foundationModels/v1/completion',
+      method: 'POST',
+      headers: {
+        'Authorization': 'Api-Key ' + s.rewriteApiKey.trim(),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        modelUri: 'gpt://' + folder + '/' + (s.rewriteModel || 'yandexgpt-5-lite'),
+        completionOptions: {
+          temperature: 0.3,
+          maxTokens: Math.max(200, Math.round((Number(s.rewriteTargetChars) || 900) / 2)),
+        },
+        messages: [
+          { role: 'system', text: system },
+          { role: 'user', text: text },
+        ],
+      }),
+      throw: false,
+    });
+    if (resp.status >= 400) throw new Error('пересказ, ответ сервиса ' + resp.status);
+    const alt = ((((resp.json || {}).result || {}).alternatives || [])[0] || {}).message || {};
+    return (alt.text || '').trim();
   }
 
   /**
@@ -1257,6 +1330,52 @@ class ClaudianVoiceSettingTab extends PluginSettingTab {
         s.autoSpeak = v; await save();
         this.plugin.refreshSpeakButtons();   // значок рядом с микрофоном не должен разъезжаться с этой галочкой
       }));
+
+    new Setting(containerEl)
+      .setName('Пересказывать ответ для ушей')
+      .setDesc('Письменный ответ со списками и заголовками звучит роботом при любом голосе. '
+             + 'С этой настройкой перед озвучкой модель пересказывает его живой речью: главное вперёд, '
+             + 'без списков и путей. Занимает 1-3 секунды и стоит доли копейки за ответ.')
+      .addToggle(t => t.setValue(s.rewriteForSpeech).onChange(async v => {
+        s.rewriteForSpeech = v; await save(); this.display();
+      }));
+
+    if (s.rewriteForSpeech) {
+      new Setting(containerEl)
+        .setName('Ключ Yandex Cloud для пересказа')
+        .setDesc('Отдельный ключ с ролью ai.languageModels.user — тот, что для распознавания, сюда не подойдёт.')
+        .addText(t => {
+          t.inputEl.type = 'password';
+          t.setPlaceholder('AQVN…').setValue(s.rewriteApiKey)
+            .onChange(async v => { s.rewriteApiKey = v.trim(); await save(); });
+        });
+      new Setting(containerEl)
+        .setName('Каталог Yandex Cloud')
+        .addText(t => t.setPlaceholder('b1g…').setValue(s.rewriteFolderId)
+          .onChange(async v => { s.rewriteFolderId = v.trim(); await save(); }));
+      new Setting(containerEl)
+        .setName('Насколько длинный пересказ')
+        .setDesc('В символах. 900 — примерно минута речи.')
+        .addSlider(sl => sl.setLimits(300, 2000, 100).setValue(s.rewriteTargetChars).setDynamicTooltip()
+          .onChange(async v => { s.rewriteTargetChars = v; await save(); }));
+      new Setting(containerEl)
+        .setName('Проверить пересказ')
+        .setDesc('Возьмёт короткий пример и прочитает вслух то, что получилось.')
+        .addButton(b => b.setButtonText('Проверить').onClick(async () => {
+          const sample = 'Что сделал: починил границы предложений в озвучке, заменил сокращения на слова, '
+            + 'латиница теперь читается по-русски. Проверил тестом на пяти случаях. '
+            + 'От тебя: перезапустить программу и послушать, стало ли лучше. '
+            + 'Версия уже лежит на диске, отдельно ставить ничего не нужно.';
+          try {
+            const retold = await this.plugin.retellForSpeech(sample);
+            new Notice(retold || 'пересказ вернулся пустым', 10000);
+            this.plugin.speechCancelled = false;
+            await this.plugin.speak(retold || sample);
+          } catch (e) {
+            new Notice('Не получилось: ' + (e && e.message ? e.message : e), 8000);
+          }
+        }));
+    }
 
     new Setting(containerEl)
       .setName('Озвучивать только ответы на мои сообщения')
