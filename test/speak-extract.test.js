@@ -106,6 +106,20 @@ const checks = [
   ['читает второй абзац', spoken.includes('Голос стоит на Алёне')],
 ];
 
+// ── тот же ответ, но панель чата скрыта (открыта вторая вкладка) ──
+// 06.09.2026: из-за проверки геометрии в этом случае вслух не читалось НИЧЕГО.
+
+const hidden = el('div', 'claudian-message claudian-message-assistant', [
+  el('div', 'claudian-message-content', [
+    el('div', 'claudian-tool-call', [txt('Bash ls -la')], false),
+    el('div', 'claudian-text-block', [txt('Готово, я обновил заметку.')], false),
+  ], false),
+], false);
+
+const spokenHidden = extractSpeakable(hidden, settings);
+checks.push(['читает ответ, даже когда панель скрыта', spokenHidden.includes('Готово, я обновил заметку')]);
+checks.push(['в скрытой панели тоже не читает команды', !/Bash|ls -la/.test(spokenHidden)]);
+
 let failed = 0;
 for (const [name, ok] of checks) {
   console.log((ok ? '✓' : '✗') + ' ' + name);

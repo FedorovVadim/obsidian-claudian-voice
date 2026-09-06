@@ -153,7 +153,12 @@ function extractSpeakable(messageEl, settings) {
   const content = messageEl.querySelector('.claudian-message-content') || messageEl;
   const parts = [];
 
+  // Спрятанные узлы отбрасываем по геометрии — но только если сам блок ответа
+  // нарисован. Когда скрыта вся панель (например, открыта вторая вкладка чата),
+  // рамок нет вообще ни у чего, и такая проверка выкинула бы весь текст.
+  const panelDrawn = !!(content.getClientRects && content.getClientRects().length);
   const visible = (el) => {
+    if (!panelDrawn) return true;
     if (!el.getClientRects || el.getClientRects().length) return true;
     // элемент без геометрии считаем спрятанным (но пустые обёртки не режем зря)
     return !(el.textContent || '').trim();
@@ -602,7 +607,15 @@ class ClaudianVoicePlugin extends Plugin {
     }
     this.expectingReply = false;
     const text = extractSpeakable(last, this.settings);
-    if (!text) return this.trace('после очистки читать нечего — текст пустой');
+    if (!text) {
+      // пустой результат почти всегда значит, что фильтр перестарался —
+      // записываем улики, чтобы разбирать по факту, а не гадать
+      const raw = (last.textContent || '').trim();
+      const drawn = !!(last.getClientRects && last.getClientRects().length);
+      return this.trace('после очистки читать нечего. В блоке было символов: ' + raw.length
+        + ', блок нарисован на экране: ' + (drawn ? 'да' : 'нет')
+        + ', начало: ' + JSON.stringify(raw.slice(0, 120)));
+    }
     this.trace('озвучиваю, символов: ' + text.length);
     this.speak(text);
   }
