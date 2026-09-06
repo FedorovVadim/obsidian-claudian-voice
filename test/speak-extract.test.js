@@ -67,7 +67,8 @@ const grab = (name, kind) => {
   if (!m) throw new Error('в main.js не найдено: ' + name);
   return m[0];
 };
-const code = grab('SPEAK_SKIP_SELECTOR') + '\n' + grab('extractSpeakable') + '\nextractSpeakable';
+const code = grab('SPEAK_REPLACEMENTS') + '\n' + grab('SPEAK_SKIP_SELECTOR') + '\n'
+  + grab('extractSpeakable') + '\nextractSpeakable';
 // eval здесь намеренно: плагин — единый файл для Obsidian, без экспорта модулей.
 // Исполняется только наш собственный main.js из соседней папки, никаких внешних
 // данных сюда не попадает. Альтернатива — сборщик ради одного теста.
@@ -119,6 +120,32 @@ const hidden = el('div', 'claudian-message claudian-message-assistant', [
 const spokenHidden = extractSpeakable(hidden, settings);
 checks.push(['читает ответ, даже когда панель скрыта', spokenHidden.includes('Готово, я обновил заметку')]);
 checks.push(['в скрытой панели тоже не читает команды', !/Bash|ls -la/.test(spokenHidden)]);
+
+
+
+// ── список должен превратиться в предложения, а не в одну строку ──
+// 06.09.2026: Vadim — «звучит роботизированно, неправильно расставляет ударения».
+// Причина была в том, что пункты списка склеивались без точек.
+
+const list = el('div', 'claudian-message claudian-message-assistant', [
+  el('div', 'claudian-message-content', [
+    el('p', '', [txt('Два филиала в городе:')]),
+    el('ul', '', [
+      el('li', '', [txt('пр. Чулман, 19 (главная)')]),
+      el('li', '', [txt('Набережночелнинский пр., 62 (новый)')]),
+    ]),
+    el('p', '', [txt('Врачи: 16 специалистов, суммарный стаж 272 года')]),
+    el('p', '', [txt('Скидка 15% для Vadim’а')]),
+  ]),
+]);
+
+const spokenList = extractSpeakable(list, settings);
+checks.push(['пункты списка разделены точками', (spokenList.match(/\./g) || []).length >= 3]);
+checks.push(['список не склеен в одну строку', !/\(главная\)\s+Набережночелнинский/.test(spokenList)]);
+checks.push(['сокращение «пр.» произносится словом', spokenList.includes('проспект')]);
+checks.push(['процент произносится словом', spokenList.includes('процентов') && !spokenList.includes('%')]);
+checks.push(['латинское имя читается по-русски', spokenList.includes('Вадим') && !/Vadim/.test(spokenList)]);
+console.log('\nсписок вслух: ' + JSON.stringify(spokenList) + '\n');
 
 let failed = 0;
 for (const [name, ok] of checks) {
