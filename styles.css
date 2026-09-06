@@ -1,0 +1,101 @@
+/* Claudian Voice — стили */
+
+/* Кнопка микрофона в панели инструментов Claudian */
+.cv-mic-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  padding: var(--size-2-2);
+  border-radius: var(--radius-s);
+  color: var(--icon-color);
+  cursor: pointer;
+}
+
+.cv-mic-btn:hover {
+  color: var(--icon-color-hover);
+  background-color: var(--background-modifier-hover);
+}
+
+/* Во время записи кнопка пульсирует красным */
+.cv-mic-btn.is-rec {
+  color: var(--color-red);
+  animation: cv-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes cv-pulse {
+  0%   { opacity: 1; }
+  50%  { opacity: 0.35; }
+  100% { opacity: 1; }
+}
+
+/* Индикатор в статус-баре */
+.cv-status {
+  cursor: pointer;
+  user-select: none;
+}
+
+.cv-status.cv-rec {
+  color: var(--color-red);
+  font-weight: 600;
+  animation: cv-pulse 1.2s ease-in-out infinite;
+}
+
+.cv-status.cv-busy {
+  color: var(--color-yellow);
+}
+
+.cv-status.cv-speak {
+  color: var(--color-green);
+}
+
+/* Блок «Как пользоваться» в настройках */
+.cv-help {
+  margin-top: 2em;
+  padding: 12px 16px;
+  border-radius: var(--radius-m);
+  background: var(--background-secondary);
+  font-size: var(--font-ui-small);
+}
+
+.cv-help ul {
+  margin: 0.5em 0 0;
+  padding-left: 1.2em;
+}
+
+.cv-help li {
+  margin-bottom: 0.4em;
+}
+
+/* Переключатель «читать ответы вслух» — рядом с микрофоном */
+.cv-speak-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  padding: var(--size-2-2);
+  border-radius: var(--radius-s);
+  color: var(--icon-color);
+  cursor: pointer;
+}
+
+.cv-speak-btn:hover {
+  color: var(--icon-color-hover);
+  background-color: var(--background-modifier-hover);
+}
+
+/* включено — заметный цвет, чтобы состояние читалось с одного взгляда */
+.cv-speak-btn:not(.is-off),
+.cv-speak-ribbon:not(.is-off) {
+  color: var(--interactive-accent);
+}
+
+/* выключено — приглушённый значок с перечёркнутым динамиком */
+.cv-speak-btn.is-off,
+.cv-speak-ribbon.is-off {
+  color: var(--text-faint);
+}
