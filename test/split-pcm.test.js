@@ -23,27 +23,33 @@ const splitPcmAtQuiet = eval('(' + m[0].replace('function splitPcmAtQuiet', 'fun
 const RATE = 16000;
 const CHUNK = 25 * RATE;
 
-// шестьдесят секунд «речи»: громко, но с короткими паузами каждые пять секунд
+// Шестьдесят секунд непрерывной «речи» с паузами В ЗАРАНЕЕ ИЗВЕСТНЫХ местах —
+// 24-я и 48-я секунды. Обе попадают в окно поиска перед жёсткой границей
+// (25 и ~49 сек), но САМИ границы приходятся на громкое место.
+// Это важно: если паузы совпадут с границами, тест пройдёт и со сломанной
+// нарезкой — так и случилось на первом учении 06.09.2026.
+const PAUSES = [24, 48];
 const total = 60 * RATE;
 const pcm = new Int16Array(total);
-const quietZones = [];
 for (let i = 0; i < total; i++) {
   const sec = i / RATE;
-  const inPause = (sec % 5) > 4.7;            // 300 мс тишины каждые 5 секунд
+  const inPause = PAUSES.some(p => sec >= p && sec < p + 0.4);
   pcm[i] = inPause ? 0 : Math.round(8000 * Math.sin(i / 12));
 }
-for (let sec = 5; sec < 60; sec += 5) quietZones.push(sec * RATE - 0.15 * RATE);
 
 const parts = splitPcmAtQuiet(pcm, CHUNK);
 const lengths = parts.map(p => p.length);
 const sum = lengths.reduce((a, b) => a + b, 0);
 
-// где прошли разрезы
 const cuts = [];
 let acc = 0;
 for (let i = 0; i < parts.length - 1; i++) { acc += parts[i].length; cuts.push(acc); }
 
-const nearQuiet = cuts.every(c => quietZones.some(q => Math.abs(q - c) < 0.4 * RATE));
+// допуск жёсткий: разрез обязан лечь в саму паузу, а не «примерно рядом»
+const nearQuiet = cuts.every(c => PAUSES.some(p => {
+  const sec = c / RATE;
+  return sec >= p - 0.05 && sec <= p + 0.45;
+}));
 
 const checks = [
   ['ничего не потеряно', sum === total],
