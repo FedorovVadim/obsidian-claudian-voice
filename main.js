@@ -490,9 +490,20 @@ class ClaudianVoicePlugin extends Plugin {
     if (el === this.watchedEl && this.observer) return;
     if (this.observer) this.observer.disconnect();
     this.watchedEl = el;
-    // всё, что уже на экране, считаем прочитанным (старые беседы не озвучиваем)
-    el.querySelectorAll('.claudian-message-assistant').forEach(m => this.known.add(m));
-    this.observer = new MutationObserver(() => this.bumpQuietTimer());
+    // всё, что уже на экране, считаем прочитанным (старые беседы не озвучиваем).
+    // Исключение — ответ, который печатается прямо сейчас: он ещё не дописан,
+    // и пометить его прочитанным значит навсегда его проглотить.
+    const streaming = this.claudianIsStreaming();
+    const all = el.querySelectorAll('.claudian-message-assistant');
+    all.forEach((m, i) => {
+      const isLast = i === all.length - 1;
+      if (streaming && isLast) return;
+      this.known.add(m);
+    });
+    this.observer = new MutationObserver((mutations) => {
+      this.noticeMyMessage(mutations);
+      this.bumpQuietTimer();
+    });
     this.observer.observe(el, { childList: true, subtree: true, characterData: true });
   }
 
@@ -551,6 +562,26 @@ class ClaudianVoicePlugin extends Plugin {
     new Notice(this.settings.autoSpeak ? '🔊 Читаю ответы вслух' : '🔇 Ответы только на экране');
   }
 
+  /**
+   * «Ответ на моё сообщение» определяем по появлению моего сообщения на экране,
+   * а не только по нажатию Enter: отправить можно кнопкой, с телефона или
+   * голосом — во всех случаях в списке появляется мой блок.
+   */
+  noticeMyMessage(mutations) {
+    for (const m of mutations) {
+      for (const node of m.addedNodes || []) {
+        if (!node || node.nodeType !== Node.ELEMENT_NODE) continue;
+        const mine = (node.matches && node.matches('.claudian-message-user'))
+          || (node.querySelector && node.querySelector('.claudian-message-user'));
+        if (mine) {
+          this.expectingReply = true;
+          this.trace('увидел моё новое сообщение — жду ответ');
+          return;
+        }
+      }
+    }
+  }
+
   bumpQuietTimer() {
     if (this.quietTimer) window.clearTimeout(this.quietTimer);
     this.quietTimer = window.setTimeout(() => this.onRepliesQuiet(), 1700);
@@ -562,13 +593,37 @@ class ClaudianVoicePlugin extends Plugin {
     if (this.claudianIsStreaming()) { this.bumpQuietTimer(); return; }
     const msgs = this.watchedEl.querySelectorAll('.claudian-message-assistant');
     const last = msgs[msgs.length - 1];
-    if (!last || this.known.has(last)) return;
+    if (!last) return this.trace('ответов на экране не нашлось');
+    if (this.known.has(last)) return this.trace('этот ответ уже отмечен прочитанным');
     this.known.add(last);
-    if (!this.settings.autoSpeak) return;
-    if (this.settings.onlyAfterMine && !this.expectingReply) return;
+    if (!this.settings.autoSpeak) return this.trace('чтение вслух выключено кнопкой');
+    if (this.settings.onlyAfterMine && !this.expectingReply) {
+      return this.trace('ответ не на моё сообщение (не увидел отправку) — молчу');
+    }
     this.expectingReply = false;
     const text = extractSpeakable(last, this.settings);
-    if (text) this.speak(text);
+    if (!text) return this.trace('после очистки читать нечего — текст пустой');
+    this.trace('озвучиваю, символов: ' + text.length);
+    this.speak(text);
+  }
+
+  /**
+   * Короткий журнал решений рядом с плагином.
+   * Нужен, чтобы разбирать «почему не заговорил» по факту, а не догадками:
+   * слышимого не видно, а строчку в файле — видно.
+   */
+  trace(reason) {
+    try {
+      const fs = require('fs');
+      const path = require('path');
+      const file = path.join(
+        this.app.vault.adapter.getBasePath(), '.obsidian', 'plugins', 'claudian-voice', 'voice.log');
+      const stamp = new Date().toLocaleTimeString('ru-RU');
+      let old = '';
+      try { old = fs.readFileSync(file, 'utf8'); } catch (e) { /* первого файла ещё нет */ }
+      const lines = (old + stamp + ' — ' + reason + '\n').split('\n').slice(-120);
+      fs.writeFileSync(file, lines.join('\n'), 'utf8');
+    } catch (e) { /* журнал не должен ломать озвучку */ }
   }
 
   speakLastReply() {
