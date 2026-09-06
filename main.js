@@ -38,7 +38,7 @@ const DEFAULTS = {
   conversationMode: false,          // после озвучки снова включать микрофон
   vadEnabled: true,                 // автостоп записи по тишине
   silenceStopSec: 2.0,              // сколько секунд тишины = конец фразы
-  maxRecordSec: 90,                 // предохранитель длины записи
+  maxRecordSec: 120,                // предохранитель длины записи (2 минуты)
 
   // Озвучка (текст → голос)
   ttsEngine: 'system',              // 'system' (бесплатно) | 'yandex' | 'openai'
@@ -350,6 +350,34 @@ async function mapLimit(items, limit, fn) {
   return out;
 }
 
+/**
+ * Разрезать запись на куски не длиннее maxSamples.
+ * Режем не строго по счётчику, а в самом тихом месте рядом с границей —
+ * иначе слово рвётся пополам и обе половины распознаются мусором.
+ */
+function splitPcmAtQuiet(pcm, maxSamples) {
+  const out = [];
+  const FRAME = 1600;             // 100 мс
+  const SEARCH = 24000;           // ищем тишину в пределах 1,5 сек до границы
+  let start = 0;
+
+  while (pcm.length - start > maxSamples) {
+    const hard = start + maxSamples;
+    let best = hard, bestEnergy = Infinity;
+    for (let p = hard - SEARCH; p + FRAME <= hard; p += FRAME) {
+      if (p <= start) continue;
+      let sum = 0;
+      for (let i = p; i < p + FRAME; i++) sum += Math.abs(pcm[i]);
+      const energy = sum / FRAME;
+      if (energy < bestEnergy) { bestEnergy = energy; best = p + FRAME / 2; }
+    }
+    out.push(pcm.subarray(start, best));
+    start = best;
+  }
+  if (start < pcm.length) out.push(pcm.subarray(start));
+  return out;
+}
+
 function chunkForTts(text, maxLen = 3000) {
   const parts = splitSentences(text, Math.min(maxLen, 900));
   const out = [];
@@ -573,7 +601,6 @@ class ClaudianVoicePlugin extends Plugin {
         const btn = document.createElement('button');
         btn.className = 'cv-mic-btn clickable-icon';
         btn.setAttribute('aria-label', 'Диктовка голосом (Claudian Voice)');
-        btn.setAttribute('title', 'Диктовка голосом');
         setIcon(btn, 'mic');
         btn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); this.toggleRecording(); });
         tb.appendChild(btn);
@@ -609,8 +636,7 @@ class ClaudianVoicePlugin extends Plugin {
       b.toggleClass('is-off', !on);
       const hint = on ? 'Ответы читаются вслух — нажми, чтобы только читать с экрана'
                       : 'Ответы только на экране — нажми, чтобы слушать голосом';
-      b.setAttribute('aria-label', hint);
-      b.setAttribute('title', hint);
+      b.setAttribute('aria-label', hint);   // системную подсказку не ставим: Obsidian рисует свою
     });
   }
 
@@ -778,9 +804,8 @@ class ClaudianVoicePlugin extends Plugin {
   async startRecording() {
     if (this.state === 'rec') return;
     this.stopSpeaking(); // чтобы микрофон не записал озвучку
-    const maxSec = this.settings.sttProvider === 'yandex'
-      ? Math.min(29, this.settings.maxRecordSec)
-      : this.settings.maxRecordSec;
+    // потолка в 29 секунд больше нет: длинную запись режем на куски сами
+    const maxSec = Math.max(10, Number(this.settings.maxRecordSec) || 120);
     const rec = new Recorder({
       vad: this.settings.vadEnabled,
       silenceSec: Math.max(0.8, Number(this.settings.silenceStopSec) || 2),
@@ -882,14 +907,29 @@ class ClaudianVoicePlugin extends Plugin {
     return (resp.json && resp.json.text) || '';
   }
 
+  /**
+   * Яндекс за один запрос принимает не больше 30 секунд.
+   * Длинную диктовку режем на куски по 25 секунд и распознаём по очереди,
+   * а тексты склеиваем — так можно говорить сколько нужно, а не бояться таймера.
+   */
   async transcribeYandex(pcm16k) {
+    const CHUNK = 25 * 16000;
+    if (pcm16k.length <= CHUNK) return this.transcribeYandexChunk(pcm16k);
+
+    const parts = splitPcmAtQuiet(pcm16k, CHUNK);
+    const texts = [];
+    for (let i = 0; i < parts.length; i++) {
+      this.setState('stt');
+      new Notice('Распознаю часть ' + (i + 1) + ' из ' + parts.length + '…', 1500);
+      texts.push(await this.transcribeYandexChunk(parts[i]));
+    }
+    return texts.filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
+  }
+
+  async transcribeYandexChunk(pcm) {
     const key = (this.settings.yandexApiKey || '').trim();
     if (!key) throw new Error('не указан ключ Яндекс SpeechKit (Настройки → Claudian Voice)');
     const lang = this.settings.language === 'ru' ? 'ru-RU' : this.settings.language;
-    // лимит Яндекса: 30 сек / 1 МБ — обрезаем при необходимости
-    let pcm = pcm16k;
-    const maxSamples = 29 * 16000;
-    if (pcm.length > maxSamples) { pcm = pcm.subarray(0, maxSamples); new Notice('Запись длиннее 29 сек — Яндекс распознает только начало', 4000); }
     const resp = await requestUrl({
       url: 'https://stt.api.cloud.yandex.net/speech/v1/stt:recognize?lang=' + encodeURIComponent(lang) + '&format=lpcm&sampleRateHertz=16000&topic=general',
       method: 'POST',
@@ -1263,7 +1303,7 @@ class ClaudianVoiceSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName('Сервис распознавания')
-      .setDesc('OpenAI Whisper — лучшее качество, нужен VPN. Яндекс SpeechKit — работает из России без VPN, фразы до 29 секунд.')
+      .setDesc('OpenAI Whisper — лучшее качество, нужен VPN. Яндекс SpeechKit — работает из России без VPN, длинная диктовка режется на части автоматически.')
       .addDropdown(d => d
         .addOption('openai', 'OpenAI Whisper')
         .addOption('yandex', 'Яндекс SpeechKit')
